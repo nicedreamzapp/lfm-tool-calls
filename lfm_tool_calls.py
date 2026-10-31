@@ -5,7 +5,8 @@ LFM generations write tool calls in different formats:
   LFM2 / LFM2.5 (Pythonic):  <|tool_call_start|>[Bash(command="ls -la"), Read(file_path="/x")]<|tool_call_end|>
   LFM2.5 (JSON mode):        <|tool_call_start|>[{"name": "Bash", "arguments": {"command": "ls"}}]<|tool_call_end|>
   LFM3 (XML):                <tool_call><function=Bash><parameter=command>ls -la</parameter></function></tool_call>
-  Bare JSON drift:           {"Bash": {"command": "ls"}}   or   {"name": "Bash", "arguments": {...}}
+  Bare JSON drift:           {"Bash": {"command": "ls"}}, {"name": "Bash", "arguments": {...}},
+                             {"tool": "Bash", "args": {...}}, or a JSON array of those
 
 When the serving stack does not recognise the format (wrong template, a missing end tag, a call that
 follows some reasoning), the client gets text instead of a tool call. parse() turns any of the above
@@ -184,38 +185,59 @@ def _parse_xml_call(m, schemas):
     return [(name, params)]
 
 
+def _drift_one(obj, schemas):
+    """One bare JSON object -> (name, args), or None. Shapes: {"name": T, "arguments": {...}},
+    {"tool": T, "args": {...}}, and {T: {...}}. T must be a tool that was offered."""
+    offered = schemas
+    if not isinstance(obj, dict):
+        return None
+    for key in ("name", "tool"):
+        if isinstance(obj.get(key), str) and obj[key] in offered:
+            args = {}
+            for ak in ("arguments", "args", "parameters", "input"):
+                if ak in obj:
+                    args = obj[ak]
+                    break
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except ValueError:
+                    # A plain string for a tool with exactly one parameter: {"tool": "ask", "args": "why?"}
+                    params = list((schemas.get(obj[key]) or {}).keys())
+                    if len(params) != 1:
+                        return None
+                    args = {params[0]: args}
+            return (obj[key], args) if isinstance(args, dict) else None
+    name = next(iter(obj)) if obj else None
+    if name in offered and isinstance(obj[name], dict):
+        args = dict(obj[name])
+        args.update({k: v for k, v in obj.items() if k != name})  # stray keys the model put beside it
+        return (name, args)
+    return None
+
+
 def _json_drift(text, visible, schemas):
-    """Without a format directive in the chat template, LFM2.5 sometimes ends its turn with a bare
-    {"ToolName": {...}} or {"name": "ToolName", "arguments": {...}} object (Liquid4All/docs#130).
-    Accepted ONLY when the object closes out the reply and names a tool that was actually offered."""
+    """Without a format directive in the chat template, LFM models sometimes end a turn with a bare
+    {"ToolName": {...}}, {"name": "ToolName", "arguments": {...}} or {"tool": "ToolName", "args": {...}}
+    object, or a JSON array of them (Liquid4All/docs#130). Accepted ONLY when it closes out the reply
+    and every call names a tool that was actually offered."""
     offered = set((schemas or {}).keys())
     if not offered:
         return None
     dec = json.JSONDecoder()
     tail = visible.rstrip()
-    for i in [m.start() for m in re.finditer(r"\{", tail)]:
+    for i in [m.start() for m in re.finditer(r"[{\[]", tail)]:
         try:
             obj, end = dec.raw_decode(tail, i)
         except ValueError:
             continue
-        if end != len(tail) or not isinstance(obj, dict):
+        if end != len(tail) or not isinstance(obj, (dict, list)):
             continue
-        rest = text[:i].strip()
-        if isinstance(obj.get("name"), str) and obj["name"] in offered:
-            args = obj.get("arguments", obj.get("parameters", {}))
-            if isinstance(args, str):
-                try:
-                    args = json.loads(args)
-                except ValueError:
-                    return None
-            if isinstance(args, dict):
-                return [(obj["name"], args)], rest
-        name = next(iter(obj)) if obj else None
-        if name in offered and isinstance(obj[name], dict):
-            args = dict(obj[name])
-            args.update({k: v for k, v in obj.items() if k != name})  # stray keys the model put beside it
-            return [(name, args)], rest
-        return None
+        items = obj if isinstance(obj, list) else [obj]
+        calls = [_drift_one(it, schemas) for it in items]
+        if not calls or any(c is None for c in calls):
+            return None
+        return calls, text[:i].strip()
     return None
 
 

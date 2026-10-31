@@ -6,7 +6,9 @@ A small parser and an OpenAI-compatible proxy that turn Liquid AI LFM tool calls
 
 LFM models write tool calls in different formats depending on the generation and on how they were prompted. Serving stacks (Ollama, llama-server, vLLM, LM Studio) only recognise some of them, and when a call is not recognised it reaches the client as plain text and the agent loop stops.
 
-Two public reports describe this:
+In our own benchmark, an agent running LFM3-Omni-2B with no translation lost 168 of 633 steps (27%) because the tool calls came back in the native XML format and the harness could not read them.
+
+Two public reports describe the same thing:
 
 - [Liquid4All/cookbook#72](https://github.com/Liquid4All/cookbook/issues/72): using LFM2 with Ollama and opencode needed a hand-written proxy, because replies came back as "a mix of native, json and even xml".
 - [Liquid4All/docs#130](https://github.com/Liquid4All/docs/issues/130): the chat template never states the call format, so the model sometimes drifts to `{"TaskCreate": {...}}` and the call is silently lost.
@@ -18,7 +20,7 @@ Two public reports describe this:
 | LFM2 / LFM2.5 Pythonic | `<\|tool_call_start\|>[Bash(command="ls")]<\|tool_call_end\|>` |
 | LFM2.5 JSON mode | `<\|tool_call_start\|>[{"name": "Bash", "arguments": {"command": "ls"}}]<\|tool_call_end\|>` |
 | LFM3 XML | `<tool_call><function=Bash><parameter=command>ls</parameter></function></tool_call>` |
-| Bare JSON drift | `{"Bash": {"command": "ls"}}` or `{"name": "Bash", "arguments": {...}}` |
+| Bare JSON drift | `{"Bash": {"command": "ls"}}`, `{"name": "Bash", "arguments": {...}}` or `{"tool": "Bash", "args": {...}}`, alone or as an array |
 
 It also handles a missing end tag or closing bracket (a truncated stream), several calls in one block, `true`/`false`/`null` written inside Pythonic calls, and tool names that differ only by case or underscores from the offered tool.
 
@@ -71,9 +73,11 @@ Settings: `UPSTREAM_URL` (default `http://127.0.0.1:11434`), `PORT` (default `80
 
 ## Tested with
 
-`python3 -m unittest discover -s tests` runs 50 tests: 34 for the parser (including the safety cases above) and 16 for the proxy against a fake upstream, streaming and non-streaming. They pass on Python 3.9 and 3.14.
+`python3 -m unittest discover -s tests` runs 57 tests and passes on Python 3.9 and 3.14. 50 are synthetic: 34 for the parser (including the safety cases above) and 16 for the proxy against a fake upstream, streaming and non-streaming. The proxy tests do not talk to a real model server.
 
-All test inputs are synthetic, written in the formats listed above. No test replays a recorded model output, and the proxy tests do not talk to a real model server.
+The other 7 replay real output. We took the 634 replies LFM3-Omni-2B gave in the raw runs of a browser-agent benchmark (20 runs against a synthetic test shop, 472 distinct replies) and ran the parser over them with the 11 tools that run offered. 633 of them contained a tool call: 138 in Liquid's native XML format and 495 as `{"tool": ..., "args": ...}` JSON. The parser read 604 (95.4%) into the right tool with the right arguments. The other 29 were runaway repetitions cut off mid-string, which are not complete calls, so they correctly stay text. It made no wrong calls. The sole reply without call syntax was plain prose and also stayed text. Before this check the parser read only the 138 XML replies; the JSON shape with `tool` and `args` keys and plain-string arguments (`{"tool": "ask", "args": "question?"}`) were misses, now fixed. 19 of these replies are kept in `tests/fixtures/real_lfm3.jsonl`.
+
+This is one model, one task family and one harness, so treat it as a sanity check on real output and not a general accuracy figure. It also does not test the proxy against a live model server.
 
 ## Credits
 
