@@ -6,7 +6,7 @@ A small parser and an OpenAI-compatible proxy that turn Liquid AI LFM tool calls
 
 LFM models write tool calls in different formats depending on the generation and on how they were prompted. Serving stacks (Ollama, llama-server, vLLM, LM Studio) only recognise some of them, and when a call is not recognised it reaches the client as plain text and the agent loop stops.
 
-In our own benchmark, an agent running LFM3-Omni-2B with no translation lost 168 of 633 steps (27%) because the tool calls came back in the native XML format and the harness could not read them.
+In our own benchmark, an agent running LFM3-Omni-2B with no translation wrote 138 of its 633 tool calls (22%) in the native XML format, which the harness could not read, so each of those steps was lost.
 
 Two public reports describe the same thing:
 
