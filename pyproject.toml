@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lfm-tool-calls"
+version = "0.1.0"
+description = "Read Liquid AI LFM tool calls (Pythonic, JSON, XML) out of model text, plus an OpenAI-compatible proxy."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Matt Macosko" }]
+requires-python = ">=3.9"
+dependencies = []
+
+[tool.setuptools]
+py-modules = ["lfm_tool_calls"]
